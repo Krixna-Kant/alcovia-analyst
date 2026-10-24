@@ -1,0 +1,116 @@
+{
+  "name": "Alcovia — ClickUp lead sync",
+  "meta": {
+    "description": "Mirrors the sales list into leads + lead_stage_events. ClickUp stays the source of truth. n8n retries on clickup_task_id."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 15 }]
+        }
+      },
+      "id": "a1e2c3d4-0001-4000-8000-000000000001",
+      "name": "Every 15 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.clickup.com/api/v2/list/{{$env.CLICKUP_LEADS_LIST_ID}}/task",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{$credentials.clickUpApi.accessToken}}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "include_closed", "value": "true" },
+            { "name": "date_updated_gt", "value": "={{Date.now() - 30*60*1000}}" }
+          ]
+        }
+      },
+      "id": "a1e2c3d4-0001-4000-8000-000000000002",
+      "name": "ClickUp tasks updated",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const tasks = $input.first().json.tasks || [];\nconst STAGE = {\n  lead: 'lead',\n  qualified: 'qualified',\n  'discovery set': 'discovery_set',\n  'discovery done': 'discovery_done',\n  'ambition set': 'ambition_set',\n  'ambition done': 'ambition_done',\n  'architect set': 'architect_set',\n  'architect done': 'architect_done',\n  enrolled: 'enrolled',\n  dropped: 'dropped'\n};\nreturn tasks.map(t => {\n  const status = (t.status && t.status.status || '').toLowerCase();\n  return {\n    json: {\n      clickup_task_id: t.id,\n      created_at: new Date(Number(t.date_created)).toISOString(),\n      parent_name: t.name,\n      source: (t.custom_fields || []).find(f => f.name === 'Source')?.value || 'organic',\n      campaign_id: (t.custom_fields || []).find(f => f.name === 'Campaign')?.value || null,\n      creative_id: (t.custom_fields || []).find(f => f.name === 'Creative')?.value || null,\n      is_qualified: ['qualified','discovery set','discovery done','ambition set','ambition done','architect set','architect done','enrolled'].includes(status),\n      stage: STAGE[status] || 'lead',\n      occurred_at: new Date(Number(t.date_updated)).toISOString()\n    }\n  };\n});"
+      },
+      "id": "a1e2c3d4-0001-4000-8000-000000000003",
+      "name": "Map to warehouse shape",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into leads (created_at, source, campaign_id, creative_id, parent_name, clickup_task_id, is_qualified)\nvalues ($1::timestamptz, $2, $3, $4, $5, $6, $7)\non conflict (clickup_task_id) do update set\n  source = excluded.source,\n  campaign_id = excluded.campaign_id,\n  creative_id = excluded.creative_id,\n  is_qualified = excluded.is_qualified\nreturning id;",
+        "options": {
+          "queryReplacement": "={{ [$json.created_at, $json.source, $json.campaign_id, $json.creative_id, $json.parent_name, $json.clickup_task_id, $json.is_qualified] }}"
+        }
+      },
+      "id": "a1e2c3d4-0001-4000-8000-000000000004",
+      "name": "Upsert lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [780, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into lead_stage_events (lead_id, stage, occurred_at, actor)\nselect $1::uuid, $2, $3::timestamptz, 'n8n'\nwhere not exists (\n  select 1 from lead_stage_events\n  where lead_id = $1::uuid and stage = $2 and occurred_at = $3::timestamptz\n);",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $('Map to warehouse shape').item.json.stage, $('Map to warehouse shape').item.json.occurred_at] }}"
+        }
+      },
+      "id": "a1e2c3d4-0001-4000-8000-000000000005",
+      "name": "Insert stage if new",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1040, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into clickup_sync_log (object_type, clickup_task_id, synced_at, status, detail)\nvalues ('lead', $1, now(), 'ok', $2);",
+        "options": {
+          "queryReplacement": "={{ [$('Map to warehouse shape').item.json.clickup_task_id, $('Map to warehouse shape').item.json.stage] }}"
+        }
+      },
+      "id": "a1e2c3d4-0001-4000-8000-000000000006",
+      "name": "Sync log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1300, 0]
+    }
+  ],
+  "connections": {
+    "Every 15 min": {
+      "main": [[{ "node": "ClickUp tasks updated", "type": "main", "index": 0 }]]
+    },
+    "ClickUp tasks updated": {
+      "main": [[{ "node": "Map to warehouse shape", "type": "main", "index": 0 }]]
+    },
+    "Map to warehouse shape": {
+      "main": [[{ "node": "Upsert lead", "type": "main", "index": 0 }]]
+    },
+    "Upsert lead": {
+      "main": [[{ "node": "Insert stage if new", "type": "main", "index": 0 }]]
+    },
+    "Insert stage if new": {
+      "main": [[{ "node": "Sync log", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": [{ "name": "alcovia-gtm" }]
+}

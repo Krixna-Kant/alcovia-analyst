@@ -1,0 +1,69 @@
+{
+  "name": "Alcovia — Friday advisor scorecard",
+  "meta": {
+    "description": "Friday 5pm IST. One table per advisor: focus minutes, quiz, overdue, syllabus flag, last workshop rating. Replaces the recap document."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 17 * * 5" }]
+        }
+      },
+      "id": "f6e2c3d4-0006-4000-8000-000000000001",
+      "name": "Friday 5pm IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select a.academic_advisor,\n  a.name,\n  coalesce(sum(d.focus_minutes), 0) as focus_min,\n  round(avg(d.quiz_score) filter (where d.quiz_score is not null), 1) as quiz,\n  count(t.id) filter (where t.due_on < current_date and t.completed_at is null) as overdue,\n  coalesce(bool_or(r.syllabus_on_track = false), false) as behind\nfrom alcovians a\nleft join daily_activity d on d.alcovian_id = a.id and d.day >= current_date - 7\nleft join tasks t on t.alcovian_id = a.id\nleft join advisor_monthly_reviews r on r.alcovian_id = a.id\n  and r.month = date_trunc('month', current_date)\ngroup by a.academic_advisor, a.name\norder by a.academic_advisor, behind desc, overdue desc;"
+      },
+      "id": "f6e2c3d4-0006-4000-8000-000000000002",
+      "name": "Week rollup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst by = {};\nfor (const r of rows) {\n  by[r.academic_advisor] = by[r.academic_advisor] || [];\n  by[r.academic_advisor].push(`${r.name}  focus ${r.focus_min}m  quiz ${r.quiz ?? '—'}  overdue ${r.overdue}  ${r.behind ? 'BEHIND' : 'ok'}`);\n}\nreturn Object.entries(by).map(([advisor, lines]) => ({\n  json: { advisor, body: `Friday pulse — ${advisor}\\n` + lines.join('\\n') }\n}));"
+      },
+      "id": "f6e2c3d4-0006-4000-8000-000000000003",
+      "name": "Group by advisor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.clickup.com/api/v2/task/{{$env.CLICKUP_ADVISOR_CHAT_ID}}/comment",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ comment_text: $json.body }) }}"
+      },
+      "id": "f6e2c3d4-0006-4000-8000-000000000004",
+      "name": "Post to advisor chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 0]
+    }
+  ],
+  "connections": {
+    "Friday 5pm IST": {
+      "main": [[{ "node": "Week rollup", "type": "main", "index": 0 }]]
+    },
+    "Week rollup": {
+      "main": [[{ "node": "Group by advisor", "type": "main", "index": 0 }]]
+    },
+    "Group by advisor": {
+      "main": [[{ "node": "Post to advisor chat", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": [{ "name": "alcovia-student" }]
+}

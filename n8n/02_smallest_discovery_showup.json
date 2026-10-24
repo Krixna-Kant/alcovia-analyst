@@ -1,0 +1,73 @@
+{
+  "name": "Alcovia — Smallest.ai Discovery show-up",
+  "meta": {
+    "description": "Calls parents T-24h and T-2h before a Discovery call. Smallest.ai is already in the stack. Every attempt is a row in outreach_calls."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 1 }]
+        }
+      },
+      "id": "b2e2c3d4-0002-4000-8000-000000000001",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with due as (\n  select l.id as lead_id, l.parent_name, e.occurred_at as set_at,\n    case\n      when e.occurred_at - interval '24 hours' <= now()\n       and e.occurred_at - interval '23 hours' > now() then 'discovery_t24'\n      when e.occurred_at - interval '2 hours' <= now()\n       and e.occurred_at - interval '1 hour' > now() then 'discovery_t2'\n    end as purpose\n  from lead_stage_events e\n  join leads l on l.id = e.lead_id\n  where e.stage = 'discovery_set'\n    and not exists (\n      select 1 from lead_stage_events d\n      where d.lead_id = e.lead_id and d.stage = 'discovery_done'\n    )\n)\nselect * from due where purpose is not null\n  and not exists (\n    select 1 from outreach_calls o\n    where o.lead_id = due.lead_id and o.purpose = due.purpose\n  );"
+      },
+      "id": "b2e2c3d4-0002-4000-8000-000000000002",
+      "name": "Due T-24 or T-2",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.smallest.ai/v1/calls",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ to: $json.parent_phone, template: $json.purpose === 'discovery_t24' ? 'discovery_tomorrow' : 'discovery_today', vars: { parent: $json.parent_name } }) }}"
+      },
+      "id": "b2e2c3d4-0002-4000-8000-000000000003",
+      "name": "Smallest.ai place call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into outreach_calls (lead_id, purpose, vendor, scheduled_for, status, answered)\nvalues ($1::uuid, $2, 'smallest_ai', now(), 'queued', null);\ninsert into nudges_sent (lead_id, trigger, channel, sent_at)\nvalues ($1::uuid, $2, 'smallest_ai', now());",
+        "options": {
+          "queryReplacement": "={{ [$('Due T-24 or T-2').item.json.lead_id, $('Due T-24 or T-2').item.json.purpose] }}"
+        }
+      },
+      "id": "b2e2c3d4-0002-4000-8000-000000000004",
+      "name": "Log the call",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [780, 0]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [[{ "node": "Due T-24 or T-2", "type": "main", "index": 0 }]]
+    },
+    "Due T-24 or T-2": {
+      "main": [[{ "node": "Smallest.ai place call", "type": "main", "index": 0 }]]
+    },
+    "Smallest.ai place call": {
+      "main": [[{ "node": "Log the call", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": [{ "name": "alcovia-gtm" }]
+}

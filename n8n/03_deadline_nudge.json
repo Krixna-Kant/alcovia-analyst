@@ -1,0 +1,86 @@
+{
+  "name": "Alcovia — deadline and syllabus nudge",
+  "meta": {
+    "description": "8:30pm IST. One fact, one ask, to advisor + parent via ClickUp. Never invents a chapter stage."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "30 20 * * *" }]
+        }
+      },
+      "id": "c3e2c3d4-0003-4000-8000-000000000001",
+      "name": "8:30pm IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select a.id as alcovian_id, a.name, a.academic_advisor,\n  count(t.id) filter (where t.due_on < current_date and t.completed_at is null) as overdue,\n  bool_or(r.syllabus_on_track = false) as syllabus_behind\nfrom alcovians a\nleft join tasks t on t.alcovian_id = a.id\nleft join advisor_monthly_reviews r on r.alcovian_id = a.id\n  and r.month = date_trunc('month', current_date)\ngroup by a.id, a.name, a.academic_advisor\nhaving count(t.id) filter (where t.due_on < current_date and t.completed_at is null) > 0\n    or bool_or(r.syllabus_on_track = false);"
+      },
+      "id": "c3e2c3d4-0003-4000-8000-000000000002",
+      "name": "Behind Alcovians",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst fact = r.overdue > 0\n  ? `${r.name} has ${r.overdue} overdue task(s).`\n  : `${r.name} is behind on syllabus this month.`;\nconst ask = r.overdue > 0\n  ? 'Ask: can they close one task before tomorrow 8pm?'\n  : 'Ask: advisor to mark stage or trigger a sprint.';\nreturn [{ json: { ...r, body: `${fact} ${ask}` } }];"
+      },
+      "id": "c3e2c3d4-0003-4000-8000-000000000003",
+      "name": "One fact one ask",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.clickup.com/api/v2/task/{{$env.CLICKUP_ADVISOR_CHAT_ID}}/comment",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ comment_text: $json.body }) }}"
+      },
+      "id": "c3e2c3d4-0003-4000-8000-000000000004",
+      "name": "ClickUp comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into nudges_sent (alcovian_id, trigger, channel, sent_at)\nvalues ($1::uuid, $2, 'clickup', now());",
+        "options": {
+          "queryReplacement": "={{ [$json.alcovian_id, $json.overdue > 0 ? 'missed_deadline' : 'syllabus_behind'] }}"
+        }
+      },
+      "id": "c3e2c3d4-0003-4000-8000-000000000005",
+      "name": "Log nudge",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1040, 0]
+    }
+  ],
+  "connections": {
+    "8:30pm IST": {
+      "main": [[{ "node": "Behind Alcovians", "type": "main", "index": 0 }]]
+    },
+    "Behind Alcovians": {
+      "main": [[{ "node": "One fact one ask", "type": "main", "index": 0 }]]
+    },
+    "One fact one ask": {
+      "main": [[{ "node": "ClickUp comment", "type": "main", "index": 0 }]]
+    },
+    "ClickUp comment": {
+      "main": [[{ "node": "Log nudge", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": [{ "name": "alcovia-student" }]
+}

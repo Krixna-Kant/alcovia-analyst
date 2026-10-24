@@ -1,0 +1,73 @@
+{
+  "name": "Alcovia — trial renewal watch",
+  "meta": {
+    "description": "9:00am IST. Surfaces trial_3m renewals at 21 / 14 / 7 days as a ClickUp task on sales. Does not message the parent until sales says so."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 * * *" }]
+        }
+      },
+      "id": "d4e2c3d4-0004-4000-8000-000000000001",
+      "name": "9:00am IST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select e.id as enrollment_id, a.name, e.renewal_date, e.monthly_fee_inr,\n  (e.renewal_date - current_date) as days_left\nfrom enrollments e\njoin alcovians a on a.enrollment_id = e.id\nwhere e.plan = 'trial_3m'\n  and (e.renewal_date - current_date) in (21, 14, 7)\n  and not exists (\n    select 1 from nudges_sent n\n    where n.alcovian_id = a.id\n      and n.trigger = 'renewal_due'\n      and n.sent_at::date = current_date\n  );"
+      },
+      "id": "d4e2c3d4-0004-4000-8000-000000000002",
+      "name": "Due 21 14 7",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.clickup.com/api/v2/list/{{$env.CLICKUP_SALES_LIST_ID}}/task",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: `Renewal ${$json.days_left}d — ${$json.name}`, description: `${$json.name} trial renews on ${$json.renewal_date}. Fee ${$json.monthly_fee_inr}. Ask sales: call this week. Do not auto-message the parent.` }) }}"
+      },
+      "id": "d4e2c3d4-0004-4000-8000-000000000003",
+      "name": "Create sales task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into nudges_sent (alcovian_id, trigger, channel, sent_at)\nselect a.id, 'renewal_due', 'clickup', now()\nfrom enrollments e join alcovians a on a.enrollment_id = e.id\nwhere e.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$json.enrollment_id] }}"
+        }
+      },
+      "id": "d4e2c3d4-0004-4000-8000-000000000004",
+      "name": "Log renewal nudge",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [780, 0]
+    }
+  ],
+  "connections": {
+    "9:00am IST": {
+      "main": [[{ "node": "Due 21 14 7", "type": "main", "index": 0 }]]
+    },
+    "Due 21 14 7": {
+      "main": [[{ "node": "Create sales task", "type": "main", "index": 0 }]]
+    },
+    "Create sales task": {
+      "main": [[{ "node": "Log renewal nudge", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": [{ "name": "alcovia-gtm" }]
+}

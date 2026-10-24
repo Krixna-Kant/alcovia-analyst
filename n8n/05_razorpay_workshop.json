@@ -1,0 +1,56 @@
+{
+  "name": "Alcovia — Razorpay workshop seats",
+  "meta": {
+    "description": "Webhook. A ₹3999 payment becomes one row in workshop_payments. Idempotent on razorpay_payment_id."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "razorpay-workshop",
+        "responseMode": "onReceived"
+      },
+      "id": "e5e2c3d4-0005-4000-8000-000000000001",
+      "name": "Razorpay webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "alcovia-razorpay-workshop"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst payload = body.payload && body.payload.payment ? body.payload.payment.entity : body;\nconst amountPaise = Number(payload.amount || 0);\nif (amountPaise !== 399900) {\n  return [];\n}\nreturn [{\n  json: {\n    razorpay_payment_id: payload.id,\n    workshop_date: (payload.notes && payload.notes.workshop_date) || new Date().toISOString().slice(0,10),\n    amount_inr: 3999,\n    paid_at: new Date((payload.created_at || Date.now()/1000) * 1000).toISOString(),\n    parent_phone: payload.contact || null\n  }\n}];"
+      },
+      "id": "e5e2c3d4-0005-4000-8000-000000000002",
+      "name": "Only 3999 seats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into workshop_payments (razorpay_payment_id, workshop_date, seats, amount_inr, paid_at, parent_phone)\nvalues ($1, $2::date, 1, 3999, $3::timestamptz, $4)\non conflict (razorpay_payment_id) do nothing;",
+        "options": {
+          "queryReplacement": "={{ [$json.razorpay_payment_id, $json.workshop_date, $json.paid_at, $json.parent_phone] }}"
+        }
+      },
+      "id": "e5e2c3d4-0005-4000-8000-000000000003",
+      "name": "Insert seat",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [520, 0]
+    }
+  ],
+  "connections": {
+    "Razorpay webhook": {
+      "main": [[{ "node": "Only 3999 seats", "type": "main", "index": 0 }]]
+    },
+    "Only 3999 seats": {
+      "main": [[{ "node": "Insert seat", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "tags": [{ "name": "alcovia-gtm" }]
+}
